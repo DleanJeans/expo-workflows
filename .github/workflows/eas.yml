@@ -1,0 +1,190 @@
+name: EAS
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        description: App name used for APK filename and artifacts
+        required: true
+        type: string
+      expo-project-slug:
+        description: Expo project slug for EAS dashboard URL
+        required: true
+        type: string
+      ota-push-branch:
+        description: EAS branch to push OTA updates on main push
+        required: true
+        type: string
+      ota-label:
+        description: PR label name that triggers OTA update
+        required: true
+        type: string
+    secrets:
+      expo-token:
+        required: true
+
+jobs:
+  check-labels:
+    name: Check labels
+    runs-on: ubuntu-latest
+    outputs:
+      should-build-apk: ${{ steps.labels.outputs.should-build-apk }}
+      should-ota-update: ${{ steps.labels.outputs.should-ota-update }}
+    steps:
+      - name: Determine build/update flags
+        id: labels
+        uses: actions/github-script@v7
+        env:
+          OTA_LABEL: ${{ inputs.ota-label }}
+        with:
+          script: |
+            const eventName = context.eventName;
+            const otaLabel = process.env.OTA_LABEL.toLowerCase();
+
+            let shouldBuildApk = false;
+            let shouldOtaUpdate = false;
+
+            const hasLabel = (labels, labelName) =>
+              labels.some((label) => String(label.name || '').toLowerCase() === labelName.toLowerCase());
+
+            if (eventName === 'pull_request') {
+              const labels = context.payload.pull_request?.labels || [];
+              shouldBuildApk = hasLabel(labels, 'rebuild apk');
+              shouldOtaUpdate = hasLabel(labels, otaLabel);
+            } else if (eventName === 'push' && context.ref === 'refs/heads/main') {
+              shouldOtaUpdate = true;
+
+              const commitMessage = String(context.payload.head_commit?.message || '').toLowerCase();
+              if (commitMessage.includes('skip-ota')) {
+                shouldOtaUpdate = false;
+              }
+              if (commitMessage.includes('build-apk')) {
+                shouldBuildApk = true;
+              }
+
+              const prs = await github.paginate(
+                github.rest.repos.listPullRequestsAssociatedWithCommit,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  commit_sha: context.sha,
+                  per_page: 100,
+                }
+              );
+
+              const mergedLabels = prs
+                .filter((pr) => pr.merged_at)
+                .flatMap((pr) => (pr.labels || []).map((label) => String(label.name || '').toLowerCase()));
+
+              if (mergedLabels.includes('skip ota')) {
+                shouldOtaUpdate = false;
+              }
+              if (mergedLabels.includes('rebuild apk')) {
+                shouldBuildApk = true;
+              }
+            } else if (eventName === 'workflow_dispatch') {
+              shouldOtaUpdate = true;
+            }
+
+            core.setOutput('should-build-apk', shouldBuildApk ? 'true' : 'false');
+            core.setOutput('should-ota-update', shouldOtaUpdate ? 'true' : 'false');
+
+  ota-update:
+    name: OTA update
+    needs: check-labels
+    if: ${{ needs.check-labels.outputs.should-ota-update == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: ./.github/actions/setup
+        with:
+          expo-token: ${{ secrets.expo-token }}
+
+      - name: Push OTA update (main push)
+        if: ${{ github.event_name == 'push' }}
+        run: eas update --branch ${{ inputs.ota-push-branch }} --message "Update from commit ${{ github.sha }}"
+
+      - name: Push OTA update (pull request)
+        if: ${{ github.event_name == 'pull_request' }}
+        id: ota-pr
+        shell: bash
+        run: |
+          output=$(eas update --branch development --message "Update from PR #${{ github.event.pull_request.number }}" --json --non-interactive)
+          echo "$output"
+          groupId=$(echo "$output" | jq -r '.[0].group // .group // .[0].groupId // .groupId // empty')
+          echo "group-id=$groupId" >> "$GITHUB_OUTPUT"
+
+      - name: Comment OTA dashboard link
+        if: ${{ github.event_name == 'pull_request' && steps.ota-pr.outputs.group-id != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const groupId = `${{ steps.ota-pr.outputs.group-id }}`;
+            const url = `https://expo.dev/accounts/dleanjeans/projects/${{ inputs.expo-project-slug }}/updates/${groupId}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: `🚀 OTA update published: ${url}`,
+            });
+
+  build-apk:
+    name: Build APK
+    needs: check-labels
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.check-labels.outputs.should-build-apk == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup environment
+        uses: ./.github/actions/setup
+        with:
+          expo-token: ${{ secrets.expo-token }}
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set datetime
+        id: datetime
+        shell: bash
+        run: echo "datetime=$(date +'%Y%m%d-%H%M%S')" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK
+        shell: bash
+        run: eas build --platform android --profile development --local --non-interactive --output ./${{ inputs.app-name }}-${{ steps.datetime.outputs.datetime }}.apk
+
+      - name: Upload APK artifact (PR)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app-name }}-${{ steps.datetime.outputs.datetime }}
+          path: ./${{ inputs.app-name }}-${{ steps.datetime.outputs.datetime }}.apk
+
+      - name: Comment artifact link (PR)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: `📦 APK build complete. Download from workflow artifacts: ${runUrl}`,
+            });
+
+      - name: Create release (non-PR)
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.app-name }}-${{ steps.datetime.outputs.datetime }}
+          name: ${{ inputs.app-name }}-${{ steps.datetime.outputs.datetime }}
+          files: ./${{ inputs.app-name }}-${{ steps.datetime.outputs.datetime }}.apk
