@@ -11,10 +11,6 @@ on:
         description: Expo project slug for EAS dashboard URL
         required: true
         type: string
-      ota-push-branch:
-        description: EAS branch to push OTA updates on main push
-        required: true
-        type: string
       ota-label:
         description: PR label name that triggers OTA update
         required: true
@@ -29,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should-build-apk: ${{ steps.labels.outputs.should-build-apk }}
+      update-message: ${{ steps.labels.outputs.update-message }}
       should-ota-update: ${{ steps.labels.outputs.should-ota-update }}
     steps:
       - name: Determine build/update flags
@@ -43,6 +40,7 @@ jobs:
 
             let shouldBuildApk = false;
             let shouldOtaUpdate = false;
+            let updateMessage = '';
 
             const hasLabel = (labels, labelName) =>
               labels.some((label) => String(label.name || '').toLowerCase() === labelName.toLowerCase());
@@ -51,6 +49,16 @@ jobs:
               const labels = context.payload.pull_request?.labels || [];
               shouldBuildApk = hasLabel(labels, 'rebuild apk');
               shouldOtaUpdate = hasLabel(labels, otaLabel);
+              try {
+                const { data: commit } = await github.rest.repos.getCommit({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: context.payload.pull_request.head.sha,
+                });
+                updateMessage = commit.commit.message;
+              } catch {
+                updateMessage = context.payload.pull_request?.title || '';  // fallback
+              }
             } else if (eventName === 'push' && context.ref === 'refs/heads/main') {
               shouldOtaUpdate = true;
 
@@ -72,6 +80,9 @@ jobs:
                 }
               );
 
+              const mergedPr = prs.find((pr) => pr.merged_at);
+              updateMessage = mergedPr?.title || context.payload.head_commit?.message || "";
+
               const mergedLabels = prs
                 .filter((pr) => pr.merged_at)
                 .flatMap((pr) => (pr.labels || []).map((label) => String(label.name || '').toLowerCase()));
@@ -87,6 +98,7 @@ jobs:
             }
 
             core.setOutput('should-build-apk', shouldBuildApk ? 'true' : 'false');
+            core.setOutput('update-message', updateMessage);
             core.setOutput('should-ota-update', shouldOtaUpdate ? 'true' : 'false');
 
   ota-update:
@@ -101,20 +113,20 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup environment
-        uses: ./.github/actions/setup
+        uses: ./.github/actions/pnpm-expo
         with:
           expo-token: ${{ secrets.expo-token }}
 
       - name: Push OTA update (main push)
         if: ${{ github.event_name == 'push' }}
-        run: eas update --branch ${{ inputs.ota-push-branch }} --message "Update from commit ${{ github.sha }}"
+        run: eas update --branch preview --message "${{ needs.check-labels.outputs.update-message }}"
 
       - name: Push OTA update (pull request)
         if: ${{ github.event_name == 'pull_request' }}
         id: ota-pr
         shell: bash
         run: |
-          output=$(eas update --branch development --message "Update from PR #${{ github.event.pull_request.number }}" --json --non-interactive)
+          output=$(eas update --branch development --message "${{ needs.check-labels.outputs.update-message }}" --json --non-interactive)
           echo "$output"
           groupId=$(echo "$output" | jq -r '.[0].group // .group // .[0].groupId // .groupId // empty')
           echo "group-id=$groupId" >> "$GITHUB_OUTPUT"
@@ -145,7 +157,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup environment
-        uses: ./.github/actions/setup
+        uses: ./.github/actions/pnpm-expo
         with:
           expo-token: ${{ secrets.expo-token }}
 
