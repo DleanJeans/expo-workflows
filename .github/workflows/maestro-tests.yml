@@ -116,7 +116,7 @@ jobs:
 
           {
             echo "body<<EOF"
-            echo "## Maestro tests: $STATUS"
+            echo "## <img src="https://maestro.dev/favicon.svg" width="15" height="15"> Maestro tests: $STATUS"
             echo
             echo "Triggered by \`${{ github.event_name }}\`."
             echo
