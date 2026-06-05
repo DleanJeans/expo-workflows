@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       trigger-phrase:
-        description: Trigger phrase to activate Pi (e.g., "pi:", "@pi", "/pi")
+        description: Trigger phrase to activate Pi (e.g., "pi:", "pi:", "/pi")
         required: false
         type: string
         default: "pi:"
@@ -14,7 +14,7 @@ on:
         type: string
         default: opencode-go
       default-model:
-        description: Default model when no @pi[model] override is given
+        description: Default model when no pi:[model] override is given
         required: false
         type: string
         default: deepseek-v4-flash
