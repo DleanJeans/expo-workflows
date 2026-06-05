@@ -116,33 +116,40 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup environment
         uses: dleanjeans/expo-workflows/.github/actions/pnpm-expo@main
         with:
           expo-token: ${{ secrets.expo-token }}
 
-      - name: Push OTA update (main push)
-        if: ${{ github.event_name == 'push' }}
-        run: eas update --platform android --branch preview --environment preview --auto
-
-      - name: Push OTA update (pull request)
-        if: ${{ github.event_name == 'pull_request' }}
-        id: ota-pr
-        shell: bash
-        run: |
-          output=$(eas update --platform android --branch development --environment development --auto --json)
-          echo "$output"
-          groupId=$(echo "$output" | jq -r '.[0].group // .group // .[0].groupId // .groupId // empty')
-          echo "group-id=$groupId" >> "$GITHUB_OUTPUT"
-
-      - name: Comment OTA dashboard link
-        if: ${{ github.event_name == 'pull_request' && steps.ota-pr.outputs.group-id != '' }}
+      - name: Determine OTA branch
+        id: ota-vars
         uses: actions/github-script@v7
         with:
           script: |
-            const groupId = `${{ steps.ota-pr.outputs.group-id }}`;
+            const isPR = context.eventName === 'pull_request';
+            core.setOutput('branch', isPR ? 'development' : 'preview');
+            core.setOutput('environment', isPR ? 'development' : 'preview');
+            core.setOutput('json-flag', isPR ? '--json' : '');
+
+      - name: Push OTA update
+        id: ota
+        shell: bash
+        run: |
+          output=$(eas update --platform android --branch ${{ steps.ota-vars.outputs.branch }} --environment ${{ steps.ota-vars.outputs.environment }} --auto ${{ steps.ota-vars.outputs.json-flag }})
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "$output"
+            groupId=$(echo "$output" | jq -r '.[0].group // .group // .[0].groupId // .groupId // empty')
+            echo "group-id=$groupId" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment OTA dashboard link
+        if: ${{ github.event_name == 'pull_request' && steps.ota.outputs.group-id != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const groupId = `${{ steps.ota.outputs.group-id }}`;
             const url = `https://expo.dev/accounts/dleanjeans/projects/${{ inputs.expo-project-slug }}/updates/${groupId}`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -160,7 +167,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup environment
         uses: dleanjeans/expo-workflows/.github/actions/pnpm-expo@main
@@ -170,21 +177,24 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Set datetime
-        id: datetime
+      - name: Set build variables
+        id: build-vars
         shell: bash
-        run: echo "datetime=$(date +'%Y%m%d-%H%M%S')" >> "$GITHUB_OUTPUT"
+        run: |
+          ts=$(date +'%Y%m%d-%H%M%S')
+          echo "datetime=$ts" >> "$GITHUB_OUTPUT"
+          echo "apk-filename=${{ inputs.app-name }}-$ts.apk" >> "$GITHUB_OUTPUT"
 
       - name: Build APK
         shell: bash
-        run: eas build --platform android --profile development --local --non-interactive --output ./${{ inputs.app-name }}-${{ steps.datetime.outputs.datetime }}.apk
+        run: eas build --platform android --profile development --local --non-interactive --output ./${{ steps.build-vars.outputs.apk-filename }}
 
       - name: Upload APK artifact (PR)
         if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
-          name: ${{ inputs.app-name }}-${{ steps.datetime.outputs.datetime }}
-          path: ./${{ inputs.app-name }}-${{ steps.datetime.outputs.datetime }}.apk
+          name: ${{ steps.build-vars.outputs.apk-filename }}
+          path: ./${{ steps.build-vars.outputs.apk-filename }}
 
       - name: Comment artifact link (PR)
         if: ${{ github.event_name == 'pull_request' }}
@@ -203,6 +213,6 @@ jobs:
         if: ${{ github.event_name != 'pull_request' }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.app-name }}-${{ steps.datetime.outputs.datetime }}
-          name: ${{ inputs.app-name }}-${{ steps.datetime.outputs.datetime }}
-          files: ./${{ inputs.app-name }}-${{ steps.datetime.outputs.datetime }}.apk
+          tag_name: ${{ steps.build-vars.outputs.apk-filename }}
+          name: ${{ steps.build-vars.outputs.apk-filename }}
+          files: ./${{ steps.build-vars.outputs.apk-filename }}
