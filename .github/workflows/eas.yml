@@ -148,7 +148,7 @@ jobs:
   build-apk:
     name: Build APK
     needs: check-labels
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.check-labels.outputs.should-build-apk == 'true' }}
+    if: ${{ needs.check-labels.outputs.should-build-apk == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
