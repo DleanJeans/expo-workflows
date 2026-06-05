@@ -15,6 +15,11 @@ on:
         description: PR label name that triggers OTA update
         required: true
         type: string
+      apk-label:
+        description: PR label name that triggers APK build
+        required: false
+        type: string
+        default: "rebuild apk"
     secrets:
       expo-token:
         required: true
@@ -32,10 +37,12 @@ jobs:
         uses: actions/github-script@v7
         env:
           OTA_LABEL: ${{ inputs.ota-label }}
+          APK_LABEL: ${{ inputs.apk-label }}
         with:
           script: |
             const eventName = context.eventName;
             const otaLabel = process.env.OTA_LABEL.toLowerCase();
+            const rebuildApkLabel = process.env.APK_LABEL.toLowerCase();
 
             let shouldBuildApk = false;
             let shouldSendOtaUpdate = false;
@@ -45,7 +52,7 @@ jobs:
 
             if (eventName === 'pull_request') {
               const labels = context.payload.pull_request?.labels || [];
-              shouldBuildApk = hasLabel(labels, 'rebuild apk');
+              shouldBuildApk = hasLabel(labels, rebuildApkLabel);
               shouldSendOtaUpdate = hasLabel(labels, otaLabel);
 
             } else if (eventName === 'push' && context.ref === 'refs/heads/main') {
@@ -76,7 +83,7 @@ jobs:
               if (mergedLabels.includes('skip ota')) {
                 shouldSendOtaUpdate = false;
               }
-              if (mergedLabels.includes('rebuild apk')) {
+              if (mergedLabels.includes(rebuildApkLabel)) {
                 shouldBuildApk = true;
               }
             } else if (eventName === 'workflow_dispatch') {
