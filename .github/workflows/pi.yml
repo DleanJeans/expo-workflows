@@ -74,17 +74,15 @@ jobs:
               prompt = body.replace(stripRe, '').trim();
             }
 
-            // On issues (not PRs), default to implement + PR unless user asks for discussion
+            // On issues (not PRs), default to creating a PR unless user asks for discussion
             const isPR = !!context.payload.issue?.pull_request;
             const discussWords = ['explain', 'plan', 'review', 'analyze', 'describe', 'thoughts'];
             const isDiscussion = discussWords.some(w => prompt.toLowerCase().includes(w));
 
             if (!isPR && !isDiscussion) {
-              const suffix =
-                '\n\nCreate a new branch, commit the necessary changes, and open a ' +
-                'pull request with the implementation. Do not just explain or discuss — ' +
-                'implement the change.';
-              prompt = prompt ? prompt + suffix : 'Address the issue described above.' + suffix;
+              prompt = (prompt ? prompt : 'Address the issue.') +
+                '\n\nImportant: create a branch, open a pull request with the changes, ' +
+                'and leave a comment on this issue mentioning the branch name.';
             }
 
             core.setOutput('model', model || '${{ inputs.default-model }}');
