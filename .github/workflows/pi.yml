@@ -1,0 +1,85 @@
+name: Pi Agent
+
+on:
+  workflow_call:
+    inputs:
+      provider:
+        description: LLM provider (opencode-go, deepseek, anthropic, openai, google, etc.)
+        required: false
+        type: string
+        default: opencode-go
+      default-model:
+        description: Default model when no @pi[model] override is given
+        required: false
+        type: string
+        default: deepseek-v4-flash
+      node-version:
+        description: Node.js version for the runner
+        required: false
+        type: string
+        default: "24"
+      timeout-minutes:
+        description: Workflow timeout in minutes
+        required: false
+        type: number
+        default: 30
+    secrets:
+      api-key:
+        description: API key for the LLM provider (e.g., OPENCODE_API_KEY)
+        required: true
+
+concurrency:
+  group: pi-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  pi-agent:
+    if: >-
+      ${{
+        github.actor == 'DleanJeans' && contains(github.event.comment.body || '', '@pi')
+      }}
+    runs-on: self-hosted
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Parse @pi[model] and build clean prompt
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.comment?.body ||
+                         context.payload.review?.body ||
+                         '';
+
+            const match = body.match(/^@pi\[([^\]]+)\]\s*([\s\S]*)/);
+            let model, prompt;
+
+            if (match) {
+              model = match[1].trim();
+              prompt = match[2].trim();
+            } else {
+              prompt = body.replace(/^@pi\s*/, '').trim();
+            }
+
+            core.setOutput('model', model || '${{ inputs.default-model }}');
+            core.setOutput('prompt', prompt);
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Run Pi agent
+        uses: shaftoe/pi-coding-agent-action@v2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          trigger: "@pi"
+          provider: ${{ inputs.provider }}
+          model: ${{ steps.parse.outputs.model }}
+          prompt: ${{ steps.parse.outputs.prompt }}
+          token: ${{ secrets.api-key }}
+          auto_compaction: true
