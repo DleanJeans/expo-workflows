@@ -55,36 +55,38 @@ jobs:
               shouldBuildApk = hasLabel(labels, rebuildApkLabel);
               shouldSendOtaUpdate = hasLabel(labels, otaLabel);
 
-            } else if (eventName === 'push' && context.ref === 'refs/heads/main') {
+            } else if (eventName === 'push') {
               shouldSendOtaUpdate = true;
 
               const commitMessage = String(context.payload.head_commit?.message || '').toLowerCase();
               if (commitMessage.includes('skip-ota')) {
                 shouldSendOtaUpdate = false;
               }
-              if (commitMessage.includes('build-apk')) {
+              if (context.ref === 'refs/heads/main' && commitMessage.includes('build-apk')) {
                 shouldBuildApk = true;
               }
 
-              const prs = await github.paginate(
-                github.rest.repos.listPullRequestsAssociatedWithCommit,
-                {
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  commit_sha: context.sha,
-                  per_page: 100,
+              if (context.ref === 'refs/heads/main') {
+                const prs = await github.paginate(
+                  github.rest.repos.listPullRequestsAssociatedWithCommit,
+                  {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    commit_sha: context.sha,
+                    per_page: 100,
+                  }
+                );
+
+                const mergedLabels = prs
+                  .filter((pr) => pr.merged_at)
+                  .flatMap((pr) => (pr.labels || []).map((label) => String(label.name || '').toLowerCase()));
+
+                if (mergedLabels.includes('skip ota')) {
+                  shouldSendOtaUpdate = false;
                 }
-              );
-
-              const mergedLabels = prs
-                .filter((pr) => pr.merged_at)
-                .flatMap((pr) => (pr.labels || []).map((label) => String(label.name || '').toLowerCase()));
-
-              if (mergedLabels.includes('skip ota')) {
-                shouldSendOtaUpdate = false;
-              }
-              if (mergedLabels.includes(rebuildApkLabel)) {
-                shouldBuildApk = true;
+                if (mergedLabels.includes(rebuildApkLabel)) {
+                  shouldBuildApk = true;
+                }
               }
             } else if (eventName === 'workflow_dispatch') {
               shouldSendOtaUpdate = true;
@@ -129,8 +131,10 @@ jobs:
         with:
           script: |
             const isPR = context.eventName === 'pull_request';
-            core.setOutput('branch', isPR ? 'development' : 'preview');
-            core.setOutput('environment', isPR ? 'development' : 'preview');
+            const isNonMainPush = context.eventName === 'push' && context.ref !== 'refs/heads/main';
+            const target = isPR || isNonMainPush ? 'development' : 'preview';
+            core.setOutput('branch', target);
+            core.setOutput('environment', target);
             core.setOutput('json-flag', isPR ? '--json' : '');
 
       - name: Push OTA update
