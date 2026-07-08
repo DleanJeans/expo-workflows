@@ -141,11 +141,13 @@ jobs:
         id: ota
         shell: bash
         run: |
-          output=$(eas update --platform android --branch ${{ steps.ota-vars.outputs.branch }} --environment ${{ steps.ota-vars.outputs.environment }} --auto ${{ steps.ota-vars.outputs.json-flag }})
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "$output"
-            groupId=$(echo "$output" | jq -r '.[0].group // .group // .[0].groupId // .groupId // empty')
+            output_file=$(mktemp)
+            eas update --platform android --branch ${{ steps.ota-vars.outputs.branch }} --environment ${{ steps.ota-vars.outputs.environment }} --non-interactive --auto --json | tee "$output_file"
+            groupId=$(jq -r '.[0].group // .group // .[0].groupId // .groupId // empty' "$output_file")
             echo "group-id=$groupId" >> "$GITHUB_OUTPUT"
+          else
+            eas update --platform android --branch ${{ steps.ota-vars.outputs.branch }} --environment ${{ steps.ota-vars.outputs.environment }} --non-interactive --auto
           fi
 
       - name: Comment OTA dashboard link
