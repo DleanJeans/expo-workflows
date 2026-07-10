@@ -190,17 +190,22 @@ jobs:
           ts=$(date +'%Y%m%d-%H%M%S')
           echo "datetime=$ts" >> "$GITHUB_OUTPUT"
           echo "apk-filename=${{ inputs.app-name }}-$ts.apk" >> "$GITHUB_OUTPUT"
+          echo "zip-filename=${{ inputs.app-name }}-$ts.zip" >> "$GITHUB_OUTPUT"
 
       - name: Build APK
         shell: bash
         run: eas build --platform android --profile development --local --non-interactive --output ./${{ steps.build-vars.outputs.apk-filename }}
 
+      - name: Zip APK
+        shell: bash
+        run: zip ./${{ steps.build-vars.outputs.zip-filename }} ./${{ steps.build-vars.outputs.apk-filename }}
+
       - name: Upload APK artifact (PR)
         if: ${{ github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v5
         with:
-          name: ${{ steps.build-vars.outputs.apk-filename }}
-          path: ./${{ steps.build-vars.outputs.apk-filename }}
+          name: ${{ steps.build-vars.outputs.zip-filename }}
+          path: ./${{ steps.build-vars.outputs.zip-filename }}
 
       - name: Comment artifact link (PR)
         if: ${{ github.event_name == 'pull_request' }}
@@ -219,6 +224,6 @@ jobs:
         if: ${{ github.event_name != 'pull_request' }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.build-vars.outputs.apk-filename }}
-          name: ${{ steps.build-vars.outputs.apk-filename }}
-          files: ./${{ steps.build-vars.outputs.apk-filename }}
+          tag_name: ${{ steps.build-vars.outputs.zip-filename }}
+          name: ${{ steps.build-vars.outputs.zip-filename }}
+          files: ./${{ steps.build-vars.outputs.zip-filename }}
