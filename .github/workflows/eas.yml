@@ -62,7 +62,7 @@ jobs:
               if (commitMessage.includes('skip-ota')) {
                 shouldSendOtaUpdate = false;
               }
-              if (context.ref === 'refs/heads/main' && commitMessage.includes('build-apk')) {
+              if (commitMessage.includes('build-apk')) {
                 shouldBuildApk = true;
               }
 
