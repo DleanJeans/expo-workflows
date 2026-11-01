@@ -20,6 +20,13 @@ on:
         required: false
         type: string
         default: "rebuild apk"
+      profile:
+        description: >-
+          EAS build profile to build on workflow_dispatch (development, preview or production).
+          Empty falls back to commit-message keywords.
+        required: false
+        type: string
+        default: ""
     secrets:
       expo-token:
         required: true
@@ -30,6 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should-build-apk: ${{ steps.labels.outputs.should-build-apk }}
+      build-profiles: ${{ steps.labels.outputs.build-profiles }}
       should-send-ota-update: ${{ steps.labels.outputs.should-send-ota-update }}
     steps:
       - name: Determine build/update flags
@@ -38,6 +46,7 @@ jobs:
         env:
           OTA_LABEL: ${{ inputs.ota-label }}
           APK_LABEL: ${{ inputs.apk-label }}
+          DISPATCH_PROFILE: ${{ inputs.profile }}
         with:
           script: |
             const eventName = context.eventName;
@@ -46,6 +55,12 @@ jobs:
 
             let shouldBuildApk = false;
             let shouldSendOtaUpdate = false;
+            // Commit-message keywords for non-development builds. `build-apk` / the APK label stay development.
+            const extraProfiles = new Set();
+            const addProfilesFromMessage = (message) => {
+              if (message.includes('build-preview')) extraProfiles.add('preview');
+              if (message.includes('build-prod')) extraProfiles.add('production');
+            };
 
             const hasLabel = (labels, labelName) =>
               labels.some((label) => String(label.name || '').toLowerCase() === labelName.toLowerCase());
@@ -65,6 +80,7 @@ jobs:
               if (commitMessage.includes('build-apk')) {
                 shouldBuildApk = true;
               }
+              addProfilesFromMessage(commitMessage);
 
               if (context.ref === 'refs/heads/main') {
                 const prs = await github.paginate(
@@ -90,8 +106,11 @@ jobs:
               }
             } else if (eventName === 'workflow_dispatch') {
               shouldSendOtaUpdate = true;
+              const dispatchProfile = String(process.env.DISPATCH_PROFILE || '').trim().toLowerCase();
+              if (dispatchProfile === 'development') shouldBuildApk = true;
+              else if (dispatchProfile) extraProfiles.add(dispatchProfile);
 
-              try {
+              if (!dispatchProfile) try {
                 const { data: commit } = await github.rest.repos.getCommit({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
@@ -101,12 +120,15 @@ jobs:
                 if (commitMessage.includes('build-apk')) {
                   shouldBuildApk = true;
                 }
+                addProfilesFromMessage(commitMessage);
               } catch {
                 // fallback — no commit context
               }
             }
 
-            core.setOutput('should-build-apk', shouldBuildApk ? 'true' : 'false');
+            const profiles = [...(shouldBuildApk ? ['development'] : []), ...extraProfiles];
+            core.setOutput('should-build-apk', profiles.length > 0 ? 'true' : 'false');
+            core.setOutput('build-profiles', JSON.stringify(profiles));
             core.setOutput('should-send-ota-update', shouldSendOtaUpdate ? 'true' : 'false');
 
   ota-update:
@@ -165,10 +187,14 @@ jobs:
             });
 
   build-apk:
-    name: Build APK
+    name: Build ${{ matrix.profile }}
     needs: check-labels
     if: ${{ needs.check-labels.outputs.should-build-apk == 'true' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJSON(needs.check-labels.outputs.build-profiles) }}
     permissions:
       contents: write
       pull-requests: write
@@ -186,15 +212,22 @@ jobs:
       - name: Set build variables
         id: build-vars
         shell: bash
+        env:
+          PROFILE: ${{ matrix.profile }}
         run: |
           ts=$(date +'%Y%m%d-%H%M%S')
+          # Development keeps the old names; other profiles add the profile so releases don't collide.
+          base="${{ inputs.app-name }}"
+          if [[ "$PROFILE" != "development" ]]; then base="$base-$PROFILE"; fi
+          # Profiles with android.buildType "app-bundle" (usually production) produce an .aab.
+          ext=$(node -e 'const p=require("./eas.json").build?.[process.argv[1]]; process.stdout.write(p?.android?.buildType === "app-bundle" ? "aab" : "apk")' "$PROFILE")
           echo "datetime=$ts" >> "$GITHUB_OUTPUT"
-          echo "apk-filename=${{ inputs.app-name }}-$ts.apk" >> "$GITHUB_OUTPUT"
-          echo "zip-filename=${{ inputs.app-name }}-$ts.zip" >> "$GITHUB_OUTPUT"
+          echo "apk-filename=$base-$ts.$ext" >> "$GITHUB_OUTPUT"
+          echo "zip-filename=$base-$ts.zip" >> "$GITHUB_OUTPUT"
 
       - name: Build APK
         shell: bash
-        run: eas build --platform android --profile development --local --non-interactive --output ./${{ steps.build-vars.outputs.apk-filename }}
+        run: eas build --platform android --profile ${{ matrix.profile }} --local --non-interactive --output ./${{ steps.build-vars.outputs.apk-filename }}
 
       - name: Zip APK
         shell: bash
@@ -217,7 +250,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
-              body: `📦 APK build complete. Download from workflow artifacts: ${runUrl}`,
+              body: `📦 ${{ matrix.profile }} build complete. Download from workflow artifacts: ${runUrl}`,
             });
 
       - name: Create release (non-PR)
