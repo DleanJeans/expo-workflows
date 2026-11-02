@@ -13,23 +13,11 @@ runs:
 
     - uses: actions/setup-node@v6
       with:
+        # Caches the pnpm store, so no separate actions/cache step is needed
         cache: 'pnpm'
 
-    - name: 📦 Get pnpm cache directory path
-      id: pnpm-cache-dir-path
-      shell: bash
-      run: echo "dir=$(pnpm store path)" >> "$GITHUB_OUTPUT"
-
-    - name: 📦 Setup pnpm cache
-      uses: actions/cache@v3
-      with:
-        path: ${{ steps.pnpm-cache-dir-path.outputs.dir }}
-        key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-        restore-keys: |
-          ${{ runner.os }}-pnpm-
-
     - name: Setup Expo
-      uses: expo/expo-github-action@v8
+      uses: expo/expo-github-action@v9
       with:
         eas-version: latest
         token: ${{ inputs.expo-token }}

@@ -193,17 +193,17 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: pnpm/action-setup@v4
+    - uses: pnpm/action-setup@v5
       shell: bash
 
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@v6
       with:
         node-version: '22'
         cache: 'pnpm'
       shell: bash
 
     - name: Setup Expo
-      uses: expo/expo-github-action@v8
+      uses: expo/expo-github-action@v9
       with:
         eas-version: latest
         token: ${{ inputs.expo-token }}
@@ -298,7 +298,7 @@ jobs:
     steps:
       - name: Check PR labels or merged PR labels
         id: check
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             let shouldBuildApk = false;
@@ -370,7 +370,7 @@ jobs:
     env:
       npm_config_user_agent: pnpm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup
@@ -392,7 +392,7 @@ jobs:
 
       - name: Comment PR with EAS Dashboard Link
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const groupId = '${{ steps.ota-update.outputs.group-id }}';
@@ -420,7 +420,7 @@ jobs:
     env:
       npm_config_user_agent: pnpm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup environment
         uses: ./.github/actions/setup

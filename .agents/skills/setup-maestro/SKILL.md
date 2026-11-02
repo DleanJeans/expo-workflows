@@ -305,7 +305,7 @@ jobs:
     steps:
       - name: React to comment
         if: github.event_name == 'issue_comment'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             github.rest.reactions.createForIssueComment({
@@ -318,7 +318,7 @@ jobs:
       - name: Get PR number
         if: github.event_name == 'issue_comment'
         id: pr
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           result-encoding: string
           script: |
@@ -329,7 +329,7 @@ jobs:
             });
             return pr.number.toString();
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
 
@@ -384,7 +384,7 @@ jobs:
 
       - name: Comment PR with Test Results
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const results = `${{ steps.format-results.outputs.results }}`.trim();
@@ -422,7 +422,7 @@ jobs:
     if: contains(github.event.label.name, 'run maestro tests')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Build APK
         run: |

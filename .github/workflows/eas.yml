@@ -20,6 +20,11 @@ on:
         required: false
         type: string
         default: "rebuild apk"
+      timezone:
+        description: IANA timezone for the build timestamp in artifact and release names
+        required: false
+        type: string
+        default: "Asia/Ho_Chi_Minh"
       profile:
         description: >-
           EAS build profile to build on workflow_dispatch (development, preview or production).
@@ -42,7 +47,7 @@ jobs:
     steps:
       - name: Determine build/update flags
         id: labels
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           OTA_LABEL: ${{ inputs.ota-label }}
           APK_LABEL: ${{ inputs.apk-label }}
@@ -149,7 +154,7 @@ jobs:
 
       - name: Determine OTA branch
         id: ota-vars
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const isPR = context.eventName === 'pull_request';
@@ -174,7 +179,7 @@ jobs:
 
       - name: Comment OTA dashboard link
         if: ${{ github.event_name == 'pull_request' && steps.ota.outputs.group-id != '' }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const groupId = `${{ steps.ota.outputs.group-id }}`;
@@ -214,7 +219,9 @@ jobs:
         shell: bash
         env:
           PROFILE: ${{ matrix.profile }}
+          TZ: ${{ inputs.timezone }}
         run: |
+          # YYYYMMDD-HHMMSS in inputs.timezone (default GMT+7)
           ts=$(date +'%Y%m%d-%H%M%S')
           # Development keeps the old names; other profiles add the profile so releases don't collide.
           base="${{ inputs.app-name }}"
@@ -235,14 +242,14 @@ jobs:
 
       - name: Upload APK artifact (PR)
         if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.build-vars.outputs.zip-filename }}
           path: ./${{ steps.build-vars.outputs.zip-filename }}
 
       - name: Comment artifact link (PR)
         if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
@@ -255,7 +262,7 @@ jobs:
 
       - name: Create release (non-PR)
         if: ${{ github.event_name != 'pull_request' }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.build-vars.outputs.zip-filename }}
           name: ${{ steps.build-vars.outputs.zip-filename }}
