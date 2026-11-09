@@ -251,6 +251,11 @@ jobs:
       - name: Push OTA update
         id: ota
         shell: bash
+        env:
+          # The fingerprint runtime version depends on the app config, which switches on APP_VARIANT
+          # (e.g. expo-dev-client is dev-only). Builds get it from the eas.json profile env, so `eas update`
+          # needs the same value or its runtime version matches no installed APK. Branch names equal variants.
+          APP_VARIANT: ${{ steps.ota-vars.outputs.branch }}
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             output_file=$(mktemp)
