@@ -32,19 +32,70 @@ on:
         required: false
         type: string
         default: ""
+      auto-build-profiles:
+        description: >-
+          Comma-separated EAS build profiles (e.g. "development,preview") to build automatically on push
+          when their expo-updates runtime version (fingerprint) differs from the latest GitHub release
+          of that profile. Needs runtimeVersion { policy: 'fingerprint' } in the app config. Empty turns it off.
+        required: false
+        type: string
+        default: ""
+      ntfy-server:
+        description: ntfy server used when the ntfy-topic secret is set
+        required: false
+        type: string
+        default: "https://ntfy.sh"
     secrets:
       expo-token:
         required: true
+      ntfy-topic:
+        description: >-
+          ntfy topic for "OTA published" / "APK ready" / failure notifications. Keep it secret: anyone who
+          knows a public ntfy.sh topic can read it. Unset turns notifications off.
+        required: false
 
 jobs:
   check-labels:
     name: Check labels
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       should-build-apk: ${{ steps.labels.outputs.should-build-apk }}
       build-profiles: ${{ steps.labels.outputs.build-profiles }}
       should-send-ota-update: ${{ steps.labels.outputs.should-send-ota-update }}
+      runtime-versions: ${{ steps.fingerprint.outputs.runtime-versions || '{}' }}
     steps:
+      # Fingerprints decide auto-builds, and stamp each release so later pushes can compare.
+      - uses: actions/checkout@v6
+        if: ${{ github.event_name != 'pull_request' && inputs.auto-build-profiles != '' }}
+
+      - name: Setup environment
+        if: ${{ github.event_name != 'pull_request' && inputs.auto-build-profiles != '' }}
+        uses: dleanjeans/expo-workflows/.github/actions/pnpm-expo@main
+        with:
+          expo-token: ${{ secrets.expo-token }}
+
+      - name: Resolve runtime versions
+        id: fingerprint
+        if: ${{ github.event_name != 'pull_request' && inputs.auto-build-profiles != '' }}
+        shell: bash
+        run: |
+          # The runtime version (fingerprint) of each APK profile, with that profile's eas.json `env` applied
+          # (e.g. APP_VARIANT changes plugins such as expo-dev-client). Only comparable to other values made here.
+          result='{}'
+          for profile in $(node -e 'const b=require("./eas.json").build||{}; console.log(Object.keys(b).filter(p=>b[p]?.android?.buildType!=="app-bundle").join(" "))'); do
+            envs=$(node -e 'const e=require("./eas.json").build[process.argv[1]].env||{}; console.log(Object.entries(e).map(([k,v])=>k+"="+v).join(" "))' "$profile")
+            if rv=$(env $envs npx expo-updates runtimeversion:resolve --platform android 2>/dev/null | jq -r '.runtimeVersion // empty'); [[ -n "$rv" ]]; then
+              echo "$profile: $rv"
+              result=$(jq -c --arg p "$profile" --arg v "$rv" '. + {($p): $v}' <<<"$result")
+            else
+              echo "::warning::Could not resolve the runtime version for $profile"
+            fi
+          done
+          echo "runtime-versions=$result" >> "$GITHUB_OUTPUT"
+
       - name: Determine build/update flags
         id: labels
         uses: actions/github-script@v8
@@ -52,6 +103,8 @@ jobs:
           OTA_LABEL: ${{ inputs.ota-label }}
           APK_LABEL: ${{ inputs.apk-label }}
           DISPATCH_PROFILE: ${{ inputs.profile }}
+          AUTO_BUILD_PROFILES: ${{ inputs.auto-build-profiles }}
+          RUNTIME_VERSIONS: ${{ steps.fingerprint.outputs.runtime-versions || '{}' }}
         with:
           script: |
             const eventName = context.eventName;
@@ -86,6 +139,37 @@ jobs:
                 shouldBuildApk = true;
               }
               addProfilesFromMessage(commitMessage);
+
+              // Auto-build profiles whose native fingerprint has no release yet. `skip-build` opts out.
+              const autoProfiles = String(process.env.AUTO_BUILD_PROFILES || '')
+                .split(',')
+                .map((p) => p.trim().toLowerCase())
+                .filter(Boolean);
+              const runtimeVersions = JSON.parse(process.env.RUNTIME_VERSIONS || '{}');
+              if (autoProfiles.length > 0 && !commitMessage.includes('skip-build')) {
+                const releases = await github.paginate(github.rest.repos.listReleases, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  per_page: 100,
+                });
+                const releasedRuntimes = new Set(
+                  releases.flatMap((r) => [...String(r.body || '').matchAll(/<!-- runtime:([\w-]+):([\w.-]+) -->/g)].map((m) => `${m[1]}:${m[2]}`))
+                );
+                for (const profile of autoProfiles) {
+                  const runtime = runtimeVersions[profile];
+                  if (!runtime) {
+                    core.warning(`No runtime version for auto-build profile "${profile}", skipping it`);
+                    continue;
+                  }
+                  if (releasedRuntimes.has(`${profile}:${runtime}`)) {
+                    core.info(`${profile}: runtime ${runtime} already released, OTA is enough`);
+                    continue;
+                  }
+                  core.info(`${profile}: new runtime ${runtime}, building`);
+                  if (profile === 'development') shouldBuildApk = true;
+                  else extraProfiles.add(profile);
+                }
+              }
 
               if (context.ref === 'refs/heads/main') {
                 const prs = await github.paginate(
@@ -191,6 +275,33 @@ jobs:
               body: `🚀 OTA update published: ${url}`,
             });
 
+      - name: Notify OTA published
+        if: ${{ success() }}
+        shell: bash
+        env:
+          NTFY_TOPIC: ${{ secrets.ntfy-topic }}
+          NTFY_SERVER: ${{ inputs.ntfy-server }}
+          BRANCH: ${{ steps.ota-vars.outputs.branch }}
+          GROUP_ID: ${{ steps.ota.outputs.group-id }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message || github.event.pull_request.title || github.sha }}
+        run: |
+          [[ -z "$NTFY_TOPIC" ]] && exit 0
+          url="https://expo.dev/accounts/dleanjeans/projects/${{ inputs.expo-project-slug }}/updates${GROUP_ID:+/$GROUP_ID}"
+          curl -fsS -H "Title: ${{ inputs.app-name }}: OTA on $BRANCH" -H "Tags: rocket" -H "Click: $url" \
+            -d "$(head -n1 <<<"$COMMIT_MESSAGE"). Reopen the app twice, or tap the update banner." "$NTFY_SERVER/$NTFY_TOPIC" || true
+
+      - name: Notify OTA failed
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          NTFY_TOPIC: ${{ secrets.ntfy-topic }}
+          NTFY_SERVER: ${{ inputs.ntfy-server }}
+        run: |
+          [[ -z "$NTFY_TOPIC" ]] && exit 0
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -fsS -H "Title: ${{ inputs.app-name }}: OTA failed" -H "Tags: x" -H "Priority: high" -H "Click: $run_url" \
+            -d "OTA update on ${{ github.ref_name }} failed." "$NTFY_SERVER/$NTFY_TOPIC" || true
+
   build-apk:
     name: Build ${{ matrix.profile }}
     needs: check-labels
@@ -261,9 +372,51 @@ jobs:
             });
 
       - name: Create release (non-PR)
+        id: release
         if: ${{ github.event_name != 'pull_request' }}
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.build-vars.outputs.zip-filename }}
           name: ${{ steps.build-vars.outputs.zip-filename }}
-          files: ./${{ steps.build-vars.outputs.zip-filename }}
+          # The raw APK is for installers such as Obtainium; the marker lets auto-builds skip known fingerprints.
+          body: |
+            `${{ matrix.profile }}` build of ${{ github.sha }}.
+
+            <!-- runtime:${{ matrix.profile }}:${{ fromJSON(needs.check-labels.outputs.runtime-versions)[matrix.profile] || 'unknown' }} -->
+          files: |
+            ./${{ steps.build-vars.outputs.zip-filename }}
+            ./${{ steps.build-vars.outputs.apk-filename }}
+
+      - name: Notify build ready
+        if: ${{ success() }}
+        shell: bash
+        env:
+          NTFY_TOPIC: ${{ secrets.ntfy-topic }}
+          NTFY_SERVER: ${{ inputs.ntfy-server }}
+          RELEASE_URL: ${{ steps.release.outputs.url }}
+          TAG: ${{ steps.build-vars.outputs.zip-filename }}
+          FILE: ${{ steps.build-vars.outputs.apk-filename }}
+        run: |
+          [[ -z "$NTFY_TOPIC" ]] && exit 0
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [[ -n "$RELEASE_URL" ]]; then
+            download="${{ github.server_url }}/${{ github.repository }}/releases/download/$TAG/$FILE"
+            curl -fsS -H "Title: ${{ inputs.app-name }}: ${{ matrix.profile }} build ready" -H "Tags: package" \
+              -H "Click: $RELEASE_URL" -H "Actions: view, Download APK, $download" \
+              -d "$FILE" "$NTFY_SERVER/$NTFY_TOPIC" || true
+          else
+            curl -fsS -H "Title: ${{ inputs.app-name }}: ${{ matrix.profile }} build ready" -H "Tags: package" \
+              -H "Click: $run_url" -d "Download from the workflow artifacts." "$NTFY_SERVER/$NTFY_TOPIC" || true
+          fi
+
+      - name: Notify build failed
+        if: ${{ failure() || cancelled() }}
+        shell: bash
+        env:
+          NTFY_TOPIC: ${{ secrets.ntfy-topic }}
+          NTFY_SERVER: ${{ inputs.ntfy-server }}
+        run: |
+          [[ -z "$NTFY_TOPIC" ]] && exit 0
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -fsS -H "Title: ${{ inputs.app-name }}: ${{ matrix.profile }} build failed" -H "Tags: x" -H "Priority: high" \
+            -H "Click: $run_url" -d "Build on ${{ github.ref_name }} did not finish." "$NTFY_SERVER/$NTFY_TOPIC" || true
