@@ -378,14 +378,12 @@ jobs:
         with:
           tag_name: ${{ steps.build-vars.outputs.zip-filename }}
           name: ${{ steps.build-vars.outputs.zip-filename }}
-          # The raw APK is for installers such as Obtainium; the marker lets auto-builds skip known fingerprints.
+          # The marker lets auto-builds skip fingerprints that already have a release.
           body: |
             `${{ matrix.profile }}` build of ${{ github.sha }}.
 
             <!-- runtime:${{ matrix.profile }}:${{ fromJSON(needs.check-labels.outputs.runtime-versions)[matrix.profile] || 'unknown' }} -->
-          files: |
-            ./${{ steps.build-vars.outputs.zip-filename }}
-            ./${{ steps.build-vars.outputs.apk-filename }}
+          files: ./${{ steps.build-vars.outputs.zip-filename }}
 
       - name: Notify build ready
         if: ${{ success() }}
@@ -395,14 +393,14 @@ jobs:
           NTFY_SERVER: ${{ inputs.ntfy-server }}
           RELEASE_URL: ${{ steps.release.outputs.url }}
           TAG: ${{ steps.build-vars.outputs.zip-filename }}
-          FILE: ${{ steps.build-vars.outputs.apk-filename }}
+          FILE: ${{ steps.build-vars.outputs.zip-filename }}
         run: |
           [[ -z "$NTFY_TOPIC" ]] && exit 0
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [[ -n "$RELEASE_URL" ]]; then
             download="${{ github.server_url }}/${{ github.repository }}/releases/download/$TAG/$FILE"
             curl -fsS -H "Title: ${{ inputs.app-name }}: ${{ matrix.profile }} build ready" -H "Tags: package" \
-              -H "Click: $RELEASE_URL" -H "Actions: view, Download APK, $download" \
+              -H "Click: $RELEASE_URL" -H "Actions: view, Download zip, $download" \
               -d "$FILE" "$NTFY_SERVER/$NTFY_TOPIC" || true
           else
             curl -fsS -H "Title: ${{ inputs.app-name }}: ${{ matrix.profile }} build ready" -H "Tags: package" \
