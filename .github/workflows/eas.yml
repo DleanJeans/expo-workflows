@@ -40,6 +40,13 @@ on:
         required: false
         type: string
         default: ""
+      build-timeout-minutes:
+        description: >-
+          Minutes before an APK build job is stopped. A stuck Gradle (e.g. out of Metaspace) otherwise
+          hangs until GitHub's 6-hour limit; the "build failed" notification still goes out.
+        required: false
+        type: number
+        default: 90
       ntfy-server:
         description: ntfy server used when the ntfy-topic secret is set
         required: false
@@ -312,6 +319,7 @@ jobs:
     needs: check-labels
     if: ${{ needs.check-labels.outputs.should-build-apk == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.build-timeout-minutes }}
     strategy:
       fail-fast: false
       matrix:
