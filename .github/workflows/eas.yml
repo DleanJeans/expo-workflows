@@ -437,12 +437,11 @@ jobs:
           RELEASE_URL: ${{ steps.release.outputs.url }}
           TAG: ${{ steps.build-vars.outputs.zip-filename }}
           FILE: ${{ steps.build-vars.outputs.zip-filename }}
-          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message || github.event.pull_request.title }}
         run: |
           [[ -z "$NTFY_TOPIC" ]] && exit 0
           subject=$(head -n1 <<<"${COMMIT_MESSAGE:-$(git log -1 --format=%s 2>/dev/null)}")
-          commit="${COMMIT_SHA:0:7} $subject"
+          commit="$subject"
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [[ -n "$RELEASE_URL" ]]; then
             download="${{ github.server_url }}/${{ github.repository }}/releases/download/$TAG/$FILE"
@@ -464,12 +463,11 @@ jobs:
           NTFY_SERVER: ${{ inputs.ntfy-server }}
           NTFY_TITLE: ${{ inputs.ntfy-title || inputs.app-name }}
           JOB_STATUS: ${{ job.status }}
-          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message || github.event.pull_request.title }}
         run: |
           [[ -z "$NTFY_TOPIC" ]] && exit 0
           subject=$(head -n1 <<<"${COMMIT_MESSAGE:-$(git log -1 --format=%s 2>/dev/null)}")
-          commit="${COMMIT_SHA:0:7} $subject"
+          commit="$subject"
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [[ "$JOB_STATUS" == "cancelled" ]]; then
             curl -fsS -H "Title: $NTFY_TITLE: ${{ matrix.profile }} build cancelled" -H "Tags: stop_sign" \
