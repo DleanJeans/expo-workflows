@@ -330,7 +330,7 @@ jobs:
           [[ -z "$NTFY_TOPIC" ]] && exit 0
           url="${CLICK_URL:-https://expo.dev/accounts/dleanjeans/projects/${{ inputs.expo-project-slug }}/updates${GROUP_ID:+/$GROUP_ID}}"
           curl -fsS -H "Title: ${{ inputs.ntfy-title || inputs.app-name }}: OTA on $BRANCH" -H "Tags: rocket" -H "Click: $url" \
-            -d "$(head -n1 <<<"$COMMIT_MESSAGE"). Reopen the app twice, or tap the update banner." "$NTFY_SERVER/$NTFY_TOPIC" || true
+            -d "$(head -n1 <<<"$COMMIT_MESSAGE")" "$NTFY_SERVER/$NTFY_TOPIC" || true
 
       - name: Notify OTA failed
         if: ${{ failure() }}
