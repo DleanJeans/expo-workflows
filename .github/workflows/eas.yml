@@ -45,6 +45,13 @@ on:
         required: false
         type: string
         default: "https://ntfy.sh"
+      ota-click-url:
+        description: >-
+          URL opened when the "OTA published" notification is tapped (e.g. the app's deep link
+          "myapp://"). Empty opens the Expo update page.
+        required: false
+        type: string
+        default: ""
     secrets:
       expo-token:
         required: true
@@ -289,9 +296,10 @@ jobs:
           BRANCH: ${{ steps.ota-vars.outputs.branch }}
           GROUP_ID: ${{ steps.ota.outputs.group-id }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message || github.event.pull_request.title || github.sha }}
+          CLICK_URL: ${{ inputs.ota-click-url }}
         run: |
           [[ -z "$NTFY_TOPIC" ]] && exit 0
-          url="https://expo.dev/accounts/dleanjeans/projects/${{ inputs.expo-project-slug }}/updates${GROUP_ID:+/$GROUP_ID}"
+          url="${CLICK_URL:-https://expo.dev/accounts/dleanjeans/projects/${{ inputs.expo-project-slug }}/updates${GROUP_ID:+/$GROUP_ID}}"
           curl -fsS -H "Title: ${{ inputs.app-name }}: OTA on $BRANCH" -H "Tags: rocket" -H "Click: $url" \
             -d "$(head -n1 <<<"$COMMIT_MESSAGE"). Reopen the app twice, or tap the update banner." "$NTFY_SERVER/$NTFY_TOPIC" || true
 
