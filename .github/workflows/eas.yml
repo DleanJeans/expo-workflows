@@ -40,6 +40,24 @@ on:
         required: false
         type: string
         default: ""
+      apk-profile:
+        description: >-
+          EAS profile built by the `build-apk` commit keyword and the APK PR label.
+        required: false
+        type: string
+        default: "development"
+      disabled-profiles:
+        description: >-
+          Comma-separated EAS profiles that are never built (auto-build, keywords, labels or manual dispatch),
+          e.g. "development". Empty re-enables everything.
+        required: false
+        type: string
+        default: ""
+      ntfy-title:
+        description: Prefix of ntfy notification titles. Empty uses app-name.
+        required: false
+        type: string
+        default: ""
       ntfy-server:
         description: ntfy server used when the ntfy-topic secret is set
         required: false
@@ -111,6 +129,8 @@ jobs:
           APK_LABEL: ${{ inputs.apk-label }}
           DISPATCH_PROFILE: ${{ inputs.profile }}
           AUTO_BUILD_PROFILES: ${{ inputs.auto-build-profiles }}
+          APK_PROFILE: ${{ inputs.apk-profile }}
+          DISABLED_PROFILES: ${{ inputs.disabled-profiles }}
           RUNTIME_VERSIONS: ${{ steps.fingerprint.outputs.runtime-versions || '{}' }}
         with:
           script: |
@@ -173,8 +193,7 @@ jobs:
                     continue;
                   }
                   core.info(`${profile}: new runtime ${runtime}, building`);
-                  if (profile === 'development') shouldBuildApk = true;
-                  else extraProfiles.add(profile);
+                  extraProfiles.add(profile);
                 }
               }
 
@@ -203,8 +222,7 @@ jobs:
             } else if (eventName === 'workflow_dispatch') {
               shouldSendOtaUpdate = true;
               const dispatchProfile = String(process.env.DISPATCH_PROFILE || '').trim().toLowerCase();
-              if (dispatchProfile === 'development') shouldBuildApk = true;
-              else if (dispatchProfile) extraProfiles.add(dispatchProfile);
+              if (dispatchProfile) extraProfiles.add(dispatchProfile);
 
               if (!dispatchProfile) try {
                 const { data: commit } = await github.rest.repos.getCommit({
@@ -222,7 +240,18 @@ jobs:
               }
             }
 
-            const profiles = [...(shouldBuildApk ? ['development'] : []), ...extraProfiles];
+            const apkProfile = String(process.env.APK_PROFILE || 'development').trim().toLowerCase();
+            const disabled = String(process.env.DISABLED_PROFILES || '')
+              .split(',')
+              .map((p) => p.trim().toLowerCase())
+              .filter(Boolean);
+            const profiles = [...new Set([...(shouldBuildApk ? [apkProfile] : []), ...extraProfiles])].filter((p) => {
+              if (disabled.includes(p)) {
+                core.info(`Profile "${p}" is disabled (disabled-profiles), not building it`);
+                return false;
+              }
+              return true;
+            });
             core.setOutput('should-build-apk', profiles.length > 0 ? 'true' : 'false');
             core.setOutput('build-profiles', JSON.stringify(profiles));
             core.setOutput('should-send-ota-update', shouldSendOtaUpdate ? 'true' : 'false');
@@ -300,7 +329,7 @@ jobs:
         run: |
           [[ -z "$NTFY_TOPIC" ]] && exit 0
           url="${CLICK_URL:-https://expo.dev/accounts/dleanjeans/projects/${{ inputs.expo-project-slug }}/updates${GROUP_ID:+/$GROUP_ID}}"
-          curl -fsS -H "Title: ${{ inputs.app-name }}: OTA on $BRANCH" -H "Tags: rocket" -H "Click: $url" \
+          curl -fsS -H "Title: ${{ inputs.ntfy-title || inputs.app-name }}: OTA on $BRANCH" -H "Tags: rocket" -H "Click: $url" \
             -d "$(head -n1 <<<"$COMMIT_MESSAGE"). Reopen the app twice, or tap the update banner." "$NTFY_SERVER/$NTFY_TOPIC" || true
 
       - name: Notify OTA failed
@@ -312,7 +341,7 @@ jobs:
         run: |
           [[ -z "$NTFY_TOPIC" ]] && exit 0
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          curl -fsS -H "Title: ${{ inputs.app-name }}: OTA failed" -H "Tags: x" -H "Priority: high" -H "Click: $run_url" \
+          curl -fsS -H "Title: ${{ inputs.ntfy-title || inputs.app-name }}: OTA failed" -H "Tags: x" -H "Priority: high" -H "Click: $run_url" \
             -d "OTA update on ${{ github.ref_name }} failed." "$NTFY_SERVER/$NTFY_TOPIC" || true
 
   build-apk:
@@ -404,30 +433,48 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.ntfy-topic }}
           NTFY_SERVER: ${{ inputs.ntfy-server }}
+          NTFY_TITLE: ${{ inputs.ntfy-title || inputs.app-name }}
           RELEASE_URL: ${{ steps.release.outputs.url }}
           TAG: ${{ steps.build-vars.outputs.zip-filename }}
           FILE: ${{ steps.build-vars.outputs.zip-filename }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message || github.event.pull_request.title }}
         run: |
           [[ -z "$NTFY_TOPIC" ]] && exit 0
+          subject=$(head -n1 <<<"${COMMIT_MESSAGE:-$(git log -1 --format=%s 2>/dev/null)}")
+          commit="${COMMIT_SHA:0:7} $subject"
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [[ -n "$RELEASE_URL" ]]; then
             download="${{ github.server_url }}/${{ github.repository }}/releases/download/$TAG/$FILE"
-            curl -fsS -H "Title: ${{ inputs.app-name }}: ${{ matrix.profile }} build ready" -H "Tags: package" \
+            curl -fsS -H "Title: $NTFY_TITLE: ${{ matrix.profile }} build ready" -H "Tags: package" \
               -H "Click: $RELEASE_URL" -H "Actions: view, Download zip, $download" \
-              -d "$FILE" "$NTFY_SERVER/$NTFY_TOPIC" || true
+              -d "$commit" "$NTFY_SERVER/$NTFY_TOPIC" || true
           else
-            curl -fsS -H "Title: ${{ inputs.app-name }}: ${{ matrix.profile }} build ready" -H "Tags: package" \
-              -H "Click: $run_url" -d "Download from the workflow artifacts." "$NTFY_SERVER/$NTFY_TOPIC" || true
+            curl -fsS -H "Title: $NTFY_TITLE: ${{ matrix.profile }} build ready" -H "Tags: package" \
+              -H "Click: $run_url" -d "$commit. Download from the workflow artifacts." "$NTFY_SERVER/$NTFY_TOPIC" || true
           fi
 
-      - name: Notify build failed
+      # job.status is "failure" for a real error and "cancelled" when the run was cancelled
+      # (manually, superseded, or timed out), so the two get different wording.
+      - name: Notify build failed or cancelled
         if: ${{ failure() || cancelled() }}
         shell: bash
         env:
           NTFY_TOPIC: ${{ secrets.ntfy-topic }}
           NTFY_SERVER: ${{ inputs.ntfy-server }}
+          NTFY_TITLE: ${{ inputs.ntfy-title || inputs.app-name }}
+          JOB_STATUS: ${{ job.status }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message || github.event.pull_request.title }}
         run: |
           [[ -z "$NTFY_TOPIC" ]] && exit 0
+          subject=$(head -n1 <<<"${COMMIT_MESSAGE:-$(git log -1 --format=%s 2>/dev/null)}")
+          commit="${COMMIT_SHA:0:7} $subject"
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          curl -fsS -H "Title: ${{ inputs.app-name }}: ${{ matrix.profile }} build failed" -H "Tags: x" -H "Priority: high" \
-            -H "Click: $run_url" -d "Build on ${{ github.ref_name }} did not finish." "$NTFY_SERVER/$NTFY_TOPIC" || true
+          if [[ "$JOB_STATUS" == "cancelled" ]]; then
+            curl -fsS -H "Title: $NTFY_TITLE: ${{ matrix.profile }} build cancelled" -H "Tags: stop_sign" \
+              -H "Click: $run_url" -d "Cancelled: $commit" "$NTFY_SERVER/$NTFY_TOPIC" || true
+          else
+            curl -fsS -H "Title: $NTFY_TITLE: ${{ matrix.profile }} build FAILED" -H "Tags: x" -H "Priority: high" \
+              -H "Click: $run_url" -d "Failed: $commit" "$NTFY_SERVER/$NTFY_TOPIC" || true
+          fi
